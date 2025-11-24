@@ -1,0 +1,324 @@
+package main
+
+import (
+	"bufio"
+	"crypto/rand"
+	"crypto/tls"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"sync"
+	"time"
+
+	"github.com/progrium/qmux/golang/session"
+)
+
+func main() {
+	var port = flag.String("p", "443", "server port to use")
+	var host = flag.String("h", "start.tunnelsh.top", "server hostname to use")
+	// var addr = flag.String("b", "127.0.0.1", "ip to bind [server only]")
+	flag.Parse()
+
+	// client usage: groktunnel [-h=<server hostname>] <local port>
+	if flag.Arg(0) != "" {
+		runClient(*host, *port)
+		return
+	}
+
+	// server usage: groktunnel [-h=<hostname>] [-b=<bind ip>]
+	// l, err := net.Listen("tcp", net.JoinHostPort(*addr, *port))
+	// fatal(err)
+	// defer l.Close()
+	// vmux, err := vhost.NewHTTPMuxer(l, 1*time.Second)
+	// fatal(err)
+
+	// go serve(vmux, *host, *port)
+
+	// log.Printf("groktunnel server [%s] ready!\n", *host)
+	// for {
+	// 	conn, err := vmux.NextError()
+	// 	fmt.Println(err)
+	// 	if conn != nil {
+	// 		conn.Close()
+	// 	}
+	// }
+}
+
+func runClient(host, port string) {
+	log.Printf("INside run client [%v]....", port)
+	for {
+		if err := connectAndRunTunnel(host, port); err != nil {
+			log.Printf("Connection failed  [%v].....retrying in 1 seconds", err)
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// func connectAndRunTunnel(host, port string) error {
+// 	log.Println("Inside connectAndRunTunnel")
+// 	serverAddr := net.JoinHostPort(host, port)
+
+// 	conf := &tls.Config{
+// 		ServerName: host,
+// 	}
+
+// 	log.Printf("Attempting to dial TLS connection to: %s", serverAddr)
+// 	conn, err := tls.Dial("tcp", serverAddr, conf)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to connect to server: %w", err)
+// 	}
+
+// 	// Send the upgrade request directly
+// 	req, err := http.NewRequest("GET", "/", nil)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to create request: %w", err)
+// 	}
+
+// 	req.Host = serverAddr
+// 	req.Header.Set("Connection", "Upgrade")
+// 	req.Header.Set("Upgrade", "tunnelsh/1.0")
+
+// 	log.Println("Writing upgrade request...")
+// 	if err := req.Write(conn); err != nil {
+// 		return fmt.Errorf("failed to write upgrade request: %w", err)
+// 	}
+
+// 	log.Println("Reading server response...")
+// 	br := bufio.NewReader(conn)
+// 	resp, err := http.ReadResponse(br, req)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to read upgrade response: %w", err)
+// 	}
+
+// 	fmt.Printf("port %s http available at:\n", flag.Arg(0))
+// 	fmt.Printf("https://%s\n", resp.Header.Get("X-Public-Host"))
+
+// 	// Create a combined reader/writer for the hijacked connection
+// 	// This ensures any buffered data in br is used by the session
+// 	hijackedConn := &hijackedConn{
+// 		Reader: br,
+// 		Conn:   conn,
+// 	}
+
+// 	sess := session.New(hijackedConn)
+// 	defer sess.Close()
+
+// 	for {
+// 		ch, err := sess.Accept()
+// 		if err != nil {
+// 			log.Printf("Session accept error: %v", err)
+// 			return err
+// 		}
+
+// 		localConn, err := net.Dial("tcp", "localhost:"+flag.Arg(0))
+// 		if err != nil {
+// 			log.Printf("Failed to connect to localhost: %v", err)
+// 			ch.Close()
+// 			continue
+// 		}
+
+// 		go join(localConn, ch)
+// 	}
+// }
+
+// // hijackedConn combines a bufio.Reader with a net.Conn
+// type hijackedConn struct {
+// 	io.Reader
+// 	net.Conn
+// }
+
+// func (hc *hijackedConn) Read(p []byte) (int, error) {
+// 	return hc.Reader.Read(p)
+// }
+
+/////////////////////////////////////////////////////////////////////////////
+
+func connectAndRunTunnel(host, port string) error {
+	log.Println("INside run connect and Run tunnel")
+	serverAddr := net.JoinHostPort(host, port)
+
+	conf := &tls.Config{
+		ServerName: host,
+	}
+
+	log.Printf("Attempting to dial TCP connection to: %s", serverAddr)
+	conn, err := tls.Dial("tcp", net.JoinHostPort(host, port), conf)
+	log.Println("Creating connection")
+	// fatal(err)
+
+	// Set TCP keepalive to detect dead connections
+	if tcpConn, ok := conn.NetConn().(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to connect to server: %w", err)
+	}
+	log.Println("Dialing client")
+	client := httputil.NewClientConn(conn, bufio.NewReader(conn))
+	req, err := http.NewRequest("GET", "/", nil)
+
+	if err != nil {
+		return fmt.Errorf("failed to connect to server: %w", err)
+	}
+	log.Println("Getting host and all")
+	// req.Host = net.JoinHostPort(host, port)
+	req.Host = host
+	req.Header.Add("Connection", "Upgrade")
+	req.Header.Add("Upgrade", "tunnelsh/1.0")
+
+	// --- ADD THIS LOG ---
+	log.Println("Writing upgrade request...")
+
+	if err := client.Write(req); err != nil {
+		return fmt.Errorf("failed to write upgrade request: %w", err)
+	}
+
+	// --- ADD THIS LOG ---
+
+	// // fatal(err)
+	// client.Write(req)
+
+	log.Println("Successfully wrote request. Waiting for server response (Read)...")
+	resp, _ := client.Read(req)
+	fmt.Printf("port %s http available at:\n", flag.Arg(0))
+	fmt.Printf("https://%s\n", resp.Header.Get("X-Public-Host"))
+	c, _ := client.Hijack()
+	sess := session.New(c)
+	defer sess.Close()
+
+	// go func() {
+	// 	sess.Wait()
+	// 	log.Println("Session closed — exiting tunnel loop")
+	// }()
+
+	for {
+		log.Println("Waiting for session.Accept()...")
+		ch, err := sess.Accept()
+		if err != nil {
+			log.Printf("Session Connection failed : [%v] ", err)
+			return err
+		}
+		// fatal(err)
+		log.Printf("✓ Accepted channel, connecting to localhost:%s", flag.Arg(0))
+		conn, err := net.Dial("tcp", "localhost:"+flag.Arg(0))
+		log.Printf("This is the error from connection [%v]", err)
+		if err != nil {
+			log.Printf("Connection failed  to local host : [%v]", err)
+			return err
+		}
+		// fatal(err)
+		log.Println("✓ Connected to localhost, starting join")
+		go join(conn, ch)
+	}
+}
+
+// func serve(vmux *vhost.HTTPMuxer, host, port string) {
+// 	ml, err := vmux.Listen(net.JoinHostPort(host, port))
+// 	fatal(err)
+// 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// 		publicHost := strings.TrimSuffix(net.JoinHostPort(newSubdomain()+host, port), ":80")
+
+// 		log.Printf("this is the public host [%v]", publicHost)
+// 		pl, err := vmux.Listen(publicHost)
+// 		fatal(err)
+// 		w.Header().Add("X-Public-Host", publicHost)
+// 		w.Header().Add("Connection", "close")
+// 		w.WriteHeader(http.StatusOK)
+// 		conn, _, _ := w.(http.Hijacker).Hijack()
+// 		sess := session.New(conn)
+// 		defer sess.Close()
+// 		log.Printf("%s: start session", publicHost)
+// 		go func() {
+// 			for {
+// 				conn, err := pl.Accept()
+// 				if err != nil {
+// 					log.Println(err)
+// 					return
+// 				}
+// 				ch, err := sess.Open(context.Background())
+// 				if err != nil {
+// 					log.Printf("This is the error [%v]", err)
+// 					return
+// 				}
+// 				go join(ch, conn)
+// 			}
+// 		}()
+// 		sess.Wait()
+// 		log.Printf("%s: end session", publicHost)
+// 	})}
+// 	srv.Serve(ml)
+// }
+
+type CloseWriter interface {
+	CloseWrite() error
+}
+
+func join(a io.ReadWriteCloser, b io.ReadWriteCloser) {
+	// go io.Copy(b, a)
+	// io.Copy(a, b)
+	// a.Close()
+	// b.Close()
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Copy from a to b
+	go func() {
+		defer wg.Done()
+		n, err := io.Copy(b, a)
+		if err != nil && err != io.EOF {
+			log.Printf("Copy a->b error after %d bytes: %v", n, err)
+		}
+		// Close write end of b when done reading from a
+		if cw, ok := b.(CloseWriter); ok {
+			cw.CloseWrite()
+		}
+	}()
+
+	// Copy from b to a
+	go func() {
+		defer wg.Done()
+		n, err := io.Copy(a, b)
+		if err != nil && err != io.EOF {
+			log.Printf("Copy b->a error after %d bytes: %v", n, err)
+		}
+		// Close write end of a when done reading from b
+		if cw, ok := a.(CloseWriter); ok {
+			cw.CloseWrite()
+		}
+	}()
+
+	// Wait for both directions to finish
+	wg.Wait()
+
+	// Close both connections
+	a.Close()
+	b.Close()
+}
+
+func newSubdomain() string {
+	b := make([]byte, 10)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	letters := []rune("abcdefghijklmnopqrstuvwxyz1234567890")
+	r := make([]rune, 10)
+	for i := range r {
+		r[i] = letters[int(b[i])*len(letters)/256]
+	}
+	return string(r) + "."
+}
+
+func fatal(err error) {
+	if err != nil {
+		log.Printf("[%v]", err)
+		log.Fatal(err)
+	}
+}
