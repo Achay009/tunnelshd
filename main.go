@@ -14,8 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/progrium/qmux/golang/mux"
-	"github.com/progrium/qmux/golang/session"
+	"github.com/hashicorp/yamux"
 )
 
 type CloseWriter interface {
@@ -23,45 +22,7 @@ type CloseWriter interface {
 }
 
 type SessionListener struct {
-	*session.Session
-}
-
-type ChannelAdapter struct {
-	mux.Channel
-}
-
-// LocalAddr returns a dummy local address to satisfy net.Conn
-func (c *ChannelAdapter) LocalAddr() net.Addr {
-	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
-}
-
-// LocalAddr returns a dummy local address to satisfy net.Conn
-func (c *ChannelAdapter) RemoteAddr() net.Addr {
-	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
-}
-
-func (c *ChannelAdapter) Read(b []byte) (n int, err error) {
-	return c.Channel.Read(b)
-}
-
-func (c *ChannelAdapter) Close() error {
-	return c.Channel.Close()
-}
-
-func (c *ChannelAdapter) Write(b []byte) (n int, err error) {
-	return c.Channel.Write(b)
-}
-
-func (sl *ChannelAdapter) SetDeadline(t time.Time) error {
-	return nil
-}
-
-func (sl *ChannelAdapter) SetReadDeadline(t time.Time) error {
-	return nil
-}
-
-func (sl *ChannelAdapter) SetWriteDeadline(t time.Time) error {
-	return nil
+	*yamux.Session
 }
 
 // Close closes the underlying session
@@ -69,23 +30,28 @@ func (sl *SessionListener) Close() error {
 	return sl.Session.Close()
 }
 
+// Close closes the underlying session
+func (sl *SessionListener) Accept() (net.Conn, error) {
+	return sl.Session.Accept()
+}
+
 func (sl *SessionListener) Addr() net.Addr {
-	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
+	return sl.Session.Addr()
 }
 
 // Accept matches the net.Listener signature.
 // qmux.Session.Accept returns (Channel, error), and Channel implements net.Conn, so this works.
-func (sl *SessionListener) Accept() (net.Conn, error) {
-	// return sl.Session.Accept()
-	channel, err := sl.Session.Accept()
-	if err != nil {
-		return nil, err
-	}
+// func (sl *SessionListener) Accept() (net.Conn, error) {
+// 	// return sl.Session.Accept()
+// 	channel, err := sl.Session.Accept()
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	// conn is of type mux.Channel, but since it implements Read/Write/Close,
-	// we can return it as a net.Conn.
-	return &ChannelAdapter{channel}, nil
-}
+// 	// conn is of type mux.Channel, but since it implements Read/Write/Close,
+// 	// we can return it as a net.Conn.
+// 	return &ChannelAdapter{channel}, nil
+// }
 
 func main() {
 	var port = flag.String("p", "8443", "server port to use")
@@ -175,6 +141,9 @@ func connectAndRunTunnel(host, port, localPort string) error {
 	fmt.Printf("  Local:  http://localhost:%s\n", localPort)
 	fmt.Printf("  Public: https://%s\n\n", publicHost)
 
+	ymConfig := yamux.DefaultConfig()
+	ymConfig.KeepAliveInterval = 10 * time.Second
+
 	// Create a combined connection that uses the buffered reader
 	hijackedConn := &bufferedConn{
 		Reader: br,
@@ -182,7 +151,12 @@ func connectAndRunTunnel(host, port, localPort string) error {
 	}
 
 	// Create session over the hijacked connection
-	sess := session.New(hijackedConn)
+	// sess := session.New(hijackedConn)
+
+	sess, err := yamux.Server(hijackedConn, ymConfig)
+	if err != nil {
+		panic(err)
+	}
 
 	targetUrl, _ := url.Parse("http://localhost:" + localPort)
 	proxy := httputil.NewSingleHostReverseProxy(targetUrl)
@@ -206,11 +180,11 @@ func connectAndRunTunnel(host, port, localPort string) error {
 	proxy.Transport = &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
-			Timeout:   5 * time.Second, // Short timeout for local checks
-			KeepAlive: 0,               // DISABLE KeepAlive (Match your curl output)
+			Timeout:   5 * time.Second,
+			KeepAlive: 0,
 		}).DialContext,
-		DisableKeepAlives:  false, // Crucial: Next.js sent 'Connection: close'
-		DisableCompression: true,  // Crucial: Don't gzip inside the tunnel
+		DisableKeepAlives:  false,
+		DisableCompression: true,
 		MaxIdleConns:       1,
 		IdleConnTimeout:    90 * time.Second,
 		TLSClientConfig:    &tls.Config{InsecureSkipVerify: true},
@@ -226,11 +200,11 @@ func connectAndRunTunnel(host, port, localPort string) error {
 
 	// Monitor session health
 	// sessionDone := make(chan struct{})
-	go func() {
-		sess.Wait()
-		// close(sessionDone)
-		log.Println("Session ended by server")
-	}()
+	// go func() {
+	// 	sess.
+	// 	// close(sessionDone)
+	// 	log.Println("Session ended by server")
+	// }()
 
 	listener := &SessionListener{sess}
 
