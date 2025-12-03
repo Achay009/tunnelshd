@@ -1,9 +1,5 @@
-module tunnel
+module tunnelshd
 
 go 1.24.2
 
-require (
-	github.com/hashicorp/yamux v0.1.2
-	github.com/inconshreveable/go-vhost v1.0.0
-	github.com/progrium/qmux/golang v0.0.0-20210721211401-475935a675d8
-)
+require github.com/hashicorp/yamux v0.1.2
