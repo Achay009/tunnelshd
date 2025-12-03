@@ -91,7 +91,7 @@ func connectAndRunTunnel(host, port, localPort string, opts *Options) error {
 	}
 
 	// Create and send upgrade request
-	req, err := http.NewRequest("POST", "/", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("GET", "/", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -100,6 +100,7 @@ func connectAndRunTunnel(host, port, localPort string, opts *Options) error {
 	req.Host = host
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "tunnelsh/1.0")
+	req.Header.Set("Content", "application/json")
 
 	log.Println("Sending upgrade request...")
 	if err := req.Write(conn); err != nil {
