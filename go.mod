@@ -1,4 +1,4 @@
-module tunnelshd
+module github.com/Achay009/tunnelshd
 
 go 1.24.2
 
