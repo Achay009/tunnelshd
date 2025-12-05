@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"reflect"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -37,7 +39,7 @@ func main() {
 		log.Fatal("Usage: tunnelsh <local-port>\nExample: tunnelsh 8080")
 	}
 
-	runClient(ControlPort, ControlHost, opts.command, opts)
+	runClient(ControlHost, ControlPort, opts.command, opts)
 }
 
 func runClient(host, port, localPort string, opts *Options) {
@@ -63,12 +65,13 @@ func connectAndRunTunnel(host, port, localPort string, opts *Options) error {
 	}
 
 	// Connect with TLS
-	log.Printf("Dialing %s", serverAddr)
+	// log.Printf("Dialing %s", serverAddr)
+	log.Println("Dialing Control Server...")
 	conn, err := tls.Dial("tcp", serverAddr, tlsConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
-
+	log.Println("Control Server connected...")
 	// Make sure we clean up the connection
 	defer conn.Close()
 
@@ -84,14 +87,28 @@ func connectAndRunTunnel(host, port, localPort string, opts *Options) error {
 		AuthToken: opts.authtoken,
 	}
 
-	jsonData, err := json.Marshal(authReq)
-	if err != nil {
-		fmt.Println("Error marshaling JSON:", err)
-		return fmt.Errorf("failed to create json: %w", err)
+	// buf, err := Pack(authReq)
+
+	var buffer bytes.Buffer
+
+	log.Printf("\n--- Created buffer for sending auth req... data (%d bytes) ---\n", buffer.Len())
+
+	encoder := gob.NewEncoder(&buffer)
+
+	if err := encoder.Encode(authReq); err != nil {
+		return fmt.Errorf("gob encode error: %w", err)
 	}
+	// err = binary.Write(&buffer, binary.LittleEndian, authReq)
+
+	// if err != nil {
+	// 	fmt.Println("Error marshaling JSON:", err)
+	// 	return fmt.Errorf("failed to create json: %w", err)
+	// }
+
+	log.Printf("\n--- Client Sending Auth req Data (%d bytes) ---\n", buffer.Len())
 
 	// Create and send upgrade request
-	req, err := http.NewRequest("GET", "/", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", "/", &buffer)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -100,7 +117,7 @@ func connectAndRunTunnel(host, port, localPort string, opts *Options) error {
 	req.Host = host
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "tunnelsh/1.0")
-	req.Header.Set("Content", "application/json")
+	req.Header.Set("Content-Type", "application/octet-stream")
 
 	log.Println("Sending upgrade request...")
 	if err := req.Write(conn); err != nil {
@@ -197,6 +214,16 @@ func connectAndRunTunnel(host, port, localPort string, opts *Options) error {
 	// This will block until the session closes
 	return httpServer.Serve(listener)
 
+}
+
+func Pack(payload interface{}) ([]byte, error) {
+	return json.Marshal(struct {
+		Type    string
+		Payload interface{}
+	}{
+		Type:    reflect.TypeOf(payload).Elem().Name(),
+		Payload: payload,
+	})
 }
 
 // bufferedConn wraps a connection with a buffered reader
