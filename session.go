@@ -12,6 +12,10 @@ type Auth struct {
 	AuthToken string
 }
 
+type CloseWriter interface {
+	CloseWrite() error
+}
+
 // whats really the point of this class
 type SessionListener struct {
 	*yamux.Session

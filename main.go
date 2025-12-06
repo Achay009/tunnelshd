@@ -5,20 +5,22 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/gob"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
-	"reflect"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/yamux"
 )
+
+type bufferedConn struct {
+	io.Reader
+	net.Conn
+}
 
 var (
 	ControlHost string = "start.tunnelsh.top"
@@ -87,8 +89,6 @@ func connectAndRunTunnel(host, port, localPort string, opts *Options) error {
 		AuthToken: opts.authtoken,
 	}
 
-	// buf, err := Pack(authReq)
-
 	var buffer bytes.Buffer
 
 	log.Printf("\n--- Created buffer for sending auth req... data (%d bytes) ---\n", buffer.Len())
@@ -98,12 +98,6 @@ func connectAndRunTunnel(host, port, localPort string, opts *Options) error {
 	if err := encoder.Encode(authReq); err != nil {
 		return fmt.Errorf("gob encode error: %w", err)
 	}
-	// err = binary.Write(&buffer, binary.LittleEndian, authReq)
-
-	// if err != nil {
-	// 	fmt.Println("Error marshaling JSON:", err)
-	// 	return fmt.Errorf("failed to create json: %w", err)
-	// }
 
 	log.Printf("\n--- Client Sending Auth req Data (%d bytes) ---\n", buffer.Len())
 
@@ -163,75 +157,102 @@ func connectAndRunTunnel(host, port, localPort string, opts *Options) error {
 		panic(err)
 	}
 
-	targetUrl, _ := url.Parse("http://localhost:" + localPort)
-	proxy := httputil.NewSingleHostReverseProxy(targetUrl)
-
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		// Lie to the local app: "This request is definitely for localhost"
-		req.Host = fmt.Sprintf("localhost:%s", localPort)
-
-		// Fix Origin for WebSockets/HMR
-		req.Header.Set("Origin", fmt.Sprintf("http://localhost:%s", localPort))
-		req.Proto = "HTTP/1.1"
-		req.ProtoMajor = 1
-		req.ProtoMinor = 1
-
-		// Tell the app it's actually running over HTTPS (on the public internet)
-		req.Header.Del("Accept-Encoding")
-	}
-
-	proxy.Transport = &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   5 * time.Second,
-			KeepAlive: 0,
-		}).DialContext,
-		DisableKeepAlives:  false,
-		DisableCompression: true,
-		MaxIdleConns:       1,
-		IdleConnTimeout:    90 * time.Second,
-		TLSClientConfig:    &tls.Config{InsecureSkipVerify: true},
-	}
-
-	proxy.FlushInterval = 100 * time.Millisecond
-
-	// Error handling for the proxy
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("Proxy error: %v", err)
-		w.WriteHeader(http.StatusBadGateway)
-	}
-
-	listener := &SessionListener{sess}
+	session := &SessionListener{sess}
 
 	log.Println("Waiting for incoming connections...")
+	for {
 
-	httpServer := &http.Server{
-		Handler: proxy,
+		// Accept with timeout check
+		ch, err := session.Accept()
+		if err != nil {
+			log.Printf("Error while Accepting connection")
+			return fmt.Errorf("session accept error: %w", err)
+		}
+
+		// Connect to local service
+		localConn, err := net.Dial("tcp", "localhost:"+localPort)
+		if err != nil {
+			log.Printf("✗ Failed to connect to localhost:%s - %v", localPort, err)
+			ch.Close()
+			continue
+		}
+		log.Printf("→ Incoming request, connecting to http://localhost:%s", localPort)
+		// log.Println("✓ Connected, proxying traffic")
+
+		// Bridge the connections
+		go func() {
+			join(localConn, ch)
+			log.Println("✓ Request completed")
+		}()
 	}
 
-	// This will block until the session closes
-	return httpServer.Serve(listener)
-
-}
-
-func Pack(payload interface{}) ([]byte, error) {
-	return json.Marshal(struct {
-		Type    string
-		Payload interface{}
-	}{
-		Type:    reflect.TypeOf(payload).Elem().Name(),
-		Payload: payload,
-	})
 }
 
 // bufferedConn wraps a connection with a buffered reader
-type bufferedConn struct {
-	io.Reader
-	net.Conn
-}
 
 func (bc *bufferedConn) Read(p []byte) (int, error) {
 	return bc.Reader.Read(p)
+}
+
+func join(a io.ReadWriteCloser, b io.ReadWriteCloser) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Copy with explicit flushing to preserve chunked transfer encoding
+	copyWithFlush := func(dst io.Writer, src io.Reader, name string) {
+		defer wg.Done()
+
+		buf := make([]byte, 32*1024) // 32KB buffer
+		totalBytes := int64(0)
+
+		for {
+			nr, er := src.Read(buf)
+			if nr > 0 {
+				totalBytes += int64(nr)
+				nw, ew := dst.Write(buf[0:nr])
+
+				// Flush immediately after each write to preserve chunk boundaries
+				// This is critical for chunked transfer encoding used by SPA dev servers
+				if f, ok := dst.(interface{ Flush() error }); ok {
+					if err := f.Flush(); err != nil {
+						log.Printf("Copy %s flush error after %d bytes: %v", name, totalBytes, err)
+						break
+					}
+				}
+
+				if ew != nil {
+					log.Printf("Copy %s write error after %d bytes: %v", name, totalBytes, ew)
+					break
+				}
+				if nr != nw {
+					log.Printf("Copy %s short write: read %d, wrote %d", name, nr, nw)
+					break
+				}
+			}
+			if er != nil {
+				if er != io.EOF {
+					log.Printf("Copy %s read error after %d bytes: %v", name, totalBytes, er)
+				}
+				break
+			}
+		}
+
+		// Close write end when done
+		if cw, ok := dst.(CloseWriter); ok {
+			cw.CloseWrite()
+		}
+	}
+
+	// Copy from a to b
+	go copyWithFlush(b, a, "a->b")
+
+	// Copy from b to a
+	go copyWithFlush(a, b, "b->a")
+
+	// Wait for both directions to finish
+	wg.Wait()
+
+	// Close both connections
+	a.Close()
+	b.Close()
 }
