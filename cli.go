@@ -12,18 +12,18 @@ Options:
 
 const usage2 string = `
 Examples:
-	tunnelsh 80
-	tunnelsh -subdomain=example 8080
-	tunnelsh -subdomain=example -authtoken=WMDNIAHDUWYBJbUB3 8080
+	tunnelshd 80
+	tunnelshd -subdomain=example 8080
+	tunnelshd -subdomain=example -authtoken=WMDNIAHDUWYBJbUB3 8080
 
 
-Advanced usage: tunnelsh [OPTIONS] <command> [command args] [...]
+Advanced usage: tunnelshd [OPTIONS] <command> [command args] [...]
 Commands:
-	tunnelsh help                    Print help
-	tunnelsh version                 Print tunnelsh version
+	tunnelshd help                    Print help
+	tunnelshd version                 Print tunnelshd version
 
 Examples:
-	tunnelsh version
+	tunnelshd version
 
 `
 
@@ -60,6 +60,7 @@ func ParseArgs() (opts *Options, err error) {
 
 	switch opts.command {
 	case "version":
+		fmt.Println("tunnelshd")
 		fmt.Println(Full())
 		os.Exit(0)
 	case "help":
