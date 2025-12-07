@@ -9,7 +9,7 @@ import (
 type Auth struct {
 	Version   string
 	Subdomain string
-	AuthToken string
+	// AuthToken string
 }
 
 type CloseWriter interface {

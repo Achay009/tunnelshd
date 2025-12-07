@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -133,9 +134,36 @@ func connectAndRunTunnel(host, port, localPort string, opts *Options) error {
 
 	// Get public host
 	publicHost := resp.Header.Get("X-Public-Host")
+	duration, err := strconv.Atoi(resp.Header.Get("X-Duration-Time"))
+	if err != nil {
+		duration = 10
+	}
 	if publicHost == "" {
 		return fmt.Errorf("server did not return X-Public-Host header")
 	}
+
+	totalDuration := time.Duration(duration) * time.Minute
+	const checkInterval = 1 * time.Minute
+	startTime := time.Now()
+
+	log.Printf("Client scheduled to shut down after %v, checking every %v...", totalDuration, checkInterval)
+
+	ticker := time.NewTicker(checkInterval)
+	go func() {
+		defer ticker.Stop()
+		for range ticker.C {
+			elapsed := time.Since(startTime)
+			remaining := totalDuration - elapsed
+
+			if remaining <= 0 {
+				log.Printf("\n--- Shutdown Timer Expired after %v ---", elapsed.Round(time.Second))
+				log.Println("Gracefully exiting application")
+				os.Exit(0)
+				return
+			}
+			log.Printf("[Timer] Time remaining until shutdown: %v", remaining.Round(time.Second))
+		}
+	}()
 
 	fmt.Printf("\n✓ Tunnel established!\n")
 	fmt.Printf("  Local:  http://localhost:%s\n", localPort)
@@ -185,7 +213,6 @@ func connectAndRunTunnel(host, port, localPort string, opts *Options) error {
 			log.Println("✓ Request completed")
 		}()
 	}
-
 }
 
 // bufferedConn wraps a connection with a buffered reader
