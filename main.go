@@ -86,7 +86,7 @@ func connectAndRunTunnel(host, port, localPort string, opts *Options) error {
 	authReq := &Auth{
 		Subdomain: opts.subdomain,
 		Version:   MajorMinor(),
-		AuthToken: opts.authtoken,
+		// AuthToken: opts.authtoken,
 	}
 
 	var buffer bytes.Buffer

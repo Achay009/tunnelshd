@@ -28,7 +28,7 @@ Examples:
 `
 
 type Options struct {
-	authtoken string
+	// authtoken string
 	subdomain string
 	command   string
 }
@@ -40,10 +40,10 @@ func ParseArgs() (opts *Options, err error) {
 		fmt.Fprintf(os.Stderr, usage2)
 	}
 
-	authtoken := flag.String(
-		"authtoken",
-		"",
-		"Authentication token for identifying a tunnelsh account")
+	// authtoken := flag.String(
+	// 	"authtoken",
+	// 	"",
+	// 	"Authentication token for identifying a tunnelsh account")
 
 	subdomain := flag.String(
 		"subdomain",
@@ -54,8 +54,8 @@ func ParseArgs() (opts *Options, err error) {
 
 	opts = &Options{
 		subdomain: *subdomain,
-		authtoken: *authtoken,
-		command:   flag.Arg(0),
+		// authtoken: *authtoken,
+		command: flag.Arg(0),
 	}
 
 	switch opts.command {
