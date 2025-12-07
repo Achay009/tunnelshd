@@ -14,7 +14,6 @@ const usage2 string = `
 Examples:
 	tunnelshd 80
 	tunnelshd -subdomain=example 8080
-	tunnelshd -subdomain=example -authtoken=WMDNIAHDUWYBJbUB3 8080
 
 
 Advanced usage: tunnelshd [OPTIONS] <command> [command args] [...]
