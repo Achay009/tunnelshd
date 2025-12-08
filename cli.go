@@ -23,7 +23,6 @@ Commands:
 
 Examples:
 	tunnelshd version
-
 `
 
 type Options struct {
