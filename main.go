@@ -24,7 +24,7 @@ type bufferedConn struct {
 }
 
 var (
-	ControlHost string = "start.tunnelsh.top"
+	ControlHost string = "start.tunnelsh.dev"
 	ControlPort string = "8443"
 )
 
